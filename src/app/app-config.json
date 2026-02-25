@@ -1,0 +1,10 @@
+{
+  "map": {
+    "defaultZoom": 1.30,
+    "labelHideZoomThreshold": 1.45,
+    "initialOffsetPercent": {
+      "x": -4,
+      "y": 15
+    }
+  }
+}
