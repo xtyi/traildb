@@ -26,13 +26,3 @@ export const ROOT_REGION: RegionKey = {
   code: "100000",
   name: "中国",
 };
-
-export const DEFAULT_COLORS = [
-  "#ec7063",
-  "#f4b350",
-  "#3db9a4",
-  "#52a7d7",
-  "#7f8dd7",
-  "#d17ec2",
-  "#4f6a7b",
-];

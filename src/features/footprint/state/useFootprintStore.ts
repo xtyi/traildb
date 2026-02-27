@@ -1,16 +1,31 @@
 import { computed, reactive, ref, watch } from "vue";
+import { appConfig } from "@/app/config";
 import { localStorageAdapter } from "@/services/storage/localStorageAdapter";
 import type { StorageAdapter } from "@/services/storage/storageAdapter";
-import { DEFAULT_COLORS, ROOT_REGION, type FootprintStateV1, type RegionKey, type VisitMark } from "@/shared/types/footprint";
+import { ROOT_REGION, type FootprintStateV1, type RegionKey, type VisitMark } from "@/shared/types/footprint";
 import { makeRegionMarkKey } from "@/shared/utils/region";
 import { migrateFootprintState } from "@/shared/utils/stateSchema";
 
 const STORAGE_DEBOUNCE_MS = 300;
+const DEFAULT_PALETTE = [...appConfig.footprint.palette];
+
+function toProvinceCode(code: string): string {
+  const prefix = code.slice(0, 2);
+  if (prefix.length < 2) {
+    return code;
+  }
+
+  return `${prefix}0000`;
+}
+
+function cityCodeBelongsToProvince(cityCode: string, provinceCode: string): boolean {
+  return cityCode.slice(0, 2) === provinceCode.slice(0, 2);
+}
 
 function createDefaultState(): FootprintStateV1 {
   return {
     version: 1,
-    selectedColor: DEFAULT_COLORS[0],
+    selectedColor: DEFAULT_PALETTE[0] ?? "#ec7063",
     currentView: { ...ROOT_REGION },
     marks: {},
   };
@@ -157,6 +172,23 @@ export function clearMark(region: RegionKey): void {
   delete state.marks[key];
 }
 
+export function clearProvinceMarkWithCities(region: RegionKey): void {
+  const provinceCode = toProvinceCode(region.code);
+  delete state.marks[`province:${provinceCode}`];
+
+  for (const key of Object.keys(state.marks)) {
+    if (!key.startsWith("city:")) {
+      continue;
+    }
+
+    const cityCode = key.slice("city:".length);
+
+    if (cityCodeBelongsToProvince(cityCode, provinceCode)) {
+      delete state.marks[key];
+    }
+  }
+}
+
 export function toggleMark(region: RegionKey): void {
   const key = makeRegionMarkKey(region);
   const existing = state.marks[key];
@@ -175,6 +207,34 @@ export function toggleMark(region: RegionKey): void {
 
 export function getMark(region: RegionKey): VisitMark | undefined {
   return state.marks[makeRegionMarkKey(region)];
+}
+
+export function setCityMarkWithProvinceSync(
+  cityRegion: RegionKey,
+  cityColor = state.selectedColor
+): void {
+  const cityCode = cityRegion.code;
+  const provinceCode = toProvinceCode(cityCode);
+  const now = new Date().toISOString();
+
+  state.marks[`city:${cityCode}`] = {
+    region: {
+      ...cityRegion,
+      level: "city",
+    },
+    color: cityColor,
+    updatedAt: now,
+  };
+
+  const provinceKey = `province:${provinceCode}`;
+  state.marks[provinceKey] = {
+    region: {
+      level: "province",
+      code: provinceCode,
+    },
+    color: cityColor,
+    updatedAt: now,
+  };
 }
 
 export function clearAllMarks(): void {
@@ -230,14 +290,16 @@ export function useFootprintStore() {
     ready: computed(() => ready.value),
     loading: computed(() => loading.value),
     error: computed(() => error.value),
-    palette: DEFAULT_COLORS,
+    palette: DEFAULT_PALETTE,
     markedCount: computed(() => Object.keys(state.marks).length),
     initialize: initializeFootprintStore,
     setSelectedColor,
     setCurrentView,
     resetCurrentViewToCountry,
     setMark,
+    setCityMarkWithProvinceSync,
     clearMark,
+    clearProvinceMarkWithCities,
     toggleMark,
     getMark,
     clearAllMarks,

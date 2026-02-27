@@ -5,5 +5,6 @@ test("loads footprint page", async ({ page }) => {
 
   await expect(page.getByText("TrailDB")).toBeVisible();
   await expect(page.getByRole("heading", { name: "旅行足迹", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "中国" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "省级地图" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "市级地图" })).toBeVisible();
 });

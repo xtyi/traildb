@@ -9,8 +9,13 @@ echarts.use([MapChart, CanvasRenderer, TooltipComponent]);
 
 interface GeoFeatureProperties {
   name?: string;
-  adcode?: string;
-  code?: string;
+  adcode?: string | number;
+  code?: string | number;
+  center?: unknown;
+  centroid?: unknown;
+  parent?: {
+    adcode?: string | number;
+  };
 }
 
 interface GeoFeature {
@@ -39,13 +44,32 @@ function isGeoFeatureCollection(input: unknown): input is GeoFeatureCollection {
 }
 
 function extractMapRegions(geoJson: GeoFeatureCollection): MapRegionFeature[] {
+  function toCenter(value: unknown): [number, number] | undefined {
+    if (!Array.isArray(value) || value.length < 2) {
+      return undefined;
+    }
+
+    const x = Number(value[0]);
+    const y = Number(value[1]);
+
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return undefined;
+    }
+
+    return [x, y];
+  }
+
   return geoJson.features
     .map((feature) => {
       const props = feature.properties ?? {};
+      const center = toCenter(props.center) ?? toCenter(props.centroid);
+      const parentCode = props.parent?.adcode == null ? undefined : String(props.parent.adcode);
 
       return {
         name: String(props.name ?? ""),
         code: String(props.adcode ?? props.code ?? ""),
+        center,
+        parentCode,
       };
     })
     .filter((region) => region.name && region.code);

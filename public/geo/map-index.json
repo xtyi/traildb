@@ -244,5 +244,15 @@
       "geoPath": "geo/province/820000.json",
       "cityGeoPath": "geo/city/820000.json"
     }
+  },
+  "city": {
+    "code": "100000",
+    "name": "中国市级",
+    "geoPath": "geo/city/china-city.json"
+  },
+  "provinceBoundary": {
+    "code": "100000",
+    "name": "中国省级边界",
+    "geoPath": "geo/province/china-boundary.json"
   }
 }

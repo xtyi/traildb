@@ -14,11 +14,22 @@ import type { MapRegionFeature } from "@/shared/types/map";
 import { getRegionDisplayName, shouldHideCountryLabel } from "@/shared/utils/regionDisplay";
 import { appConfig } from "@/app/config";
 
+interface MapFocusRequest {
+  token: number;
+  code: string;
+  center?: [number, number];
+  zoom?: number;
+  durationMs?: number;
+}
+
 const props = defineProps<{
   mapName: string;
+  provinceBoundaryMapName?: string | null;
   regions: MapRegionFeature[];
   marks: Record<string, VisitMark>;
   viewLevel: RegionLevel;
+  hideBaseLabelsByDefault?: boolean;
+  focusRequest?: MapFocusRequest | null;
   loading?: boolean;
 }>();
 
@@ -30,10 +41,19 @@ const mapElement = ref<HTMLElement | null>(null);
 let chart: ECharts | null = null;
 const DEFAULT_ZOOM = appConfig.map.defaultZoom;
 const LABEL_HIDE_ZOOM_THRESHOLD = appConfig.map.labelHideZoomThreshold;
+const MAP_REGION_BORDER_COLOR = appConfig.map.colors.regionBorder;
+const MAP_REGION_BACKGROUND_COLOR = appConfig.map.colors.regionBackground;
+const CITY_PROVINCE_BOUNDARY_COLOR = appConfig.map.colors.cityProvinceBoundary;
 const MAP_SERIES_ID = "footprint-map-series";
+const PROVINCE_BOUNDARY_SERIES_ID = "province-boundary-overlay";
 const MAP_LAYOUT_SIZE = "100%";
 const currentZoom = ref(DEFAULT_ZOOM);
+const currentCenter = ref<[number, number] | null>(null);
 let lastRenderedMapName: string | null = null;
+let lastAppliedFocusToken: number | null = null;
+let blinkIntervalTimer: ReturnType<typeof setInterval> | null = null;
+let blinkStopTimer: ReturnType<typeof setTimeout> | null = null;
+let activeBlinkDataIndex: number | null = null;
 
 const markLevel = computed<RegionLevel>(() => (props.viewLevel === "country" ? "province" : "city"));
 
@@ -49,7 +69,11 @@ function shouldHideAllLabelsByZoom(zoom: number): boolean {
   return zoom <= LABEL_HIDE_ZOOM_THRESHOLD;
 }
 
-function isLabelVisibleByZoom(zoom: number): boolean {
+function shouldShowBaseLabels(zoom: number): boolean {
+  if (props.hideBaseLabelsByDefault) {
+    return false;
+  }
+
   return !shouldHideAllLabelsByZoom(zoom);
 }
 
@@ -60,45 +84,105 @@ function initialLayoutCenter(): [string, string] {
   return [`${centerX}%`, `${centerY}%`];
 }
 
-function readChartZoom(): number {
+function toCenter(value: unknown): [number, number] | null {
+  if (!Array.isArray(value) || value.length < 2) {
+    return null;
+  }
+
+  const x = Number(value[0]);
+  const y = Number(value[1]);
+
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return null;
+  }
+
+  return [x, y];
+}
+
+function sameCenter(a: [number, number] | null, b: [number, number] | null): boolean {
+  if (!a && !b) {
+    return true;
+  }
+
+  if (!a || !b) {
+    return false;
+  }
+
+  return Math.abs(a[0] - b[0]) < 0.0001 && Math.abs(a[1] - b[1]) < 0.0001;
+}
+
+function readChartViewport(): { zoom: number; center: [number, number] | null } {
   if (!chart) {
-    return currentZoom.value;
+    return {
+      zoom: currentZoom.value,
+      center: currentCenter.value,
+    };
   }
 
   const option = chart.getOption();
-  const series = (Array.isArray(option.series) ? option.series[0] : null) as { zoom?: number | number[] } | null;
+  const series = (Array.isArray(option.series) ? option.series[0] : null) as {
+    zoom?: number | number[];
+    center?: unknown;
+  } | null;
   const zoomValue = Array.isArray(series?.zoom) ? Number(series?.zoom[0]) : Number(series?.zoom);
+  const parsedCenter = toCenter(series?.center);
 
   if (!Number.isFinite(zoomValue) || zoomValue <= 0) {
-    return currentZoom.value;
+    return {
+      zoom: currentZoom.value,
+      center: parsedCenter ?? currentCenter.value,
+    };
   }
 
-  return zoomValue;
+  return {
+    zoom: zoomValue,
+    center: parsedCenter,
+  };
 }
 
 function handleGeoRoam(): void {
-  const nextZoom = readChartZoom();
+  const { zoom: nextZoom, center: nextCenter } = readChartViewport();
+  const zoomUnchanged = Math.abs(nextZoom - currentZoom.value) < 0.001;
+  const centerUnchanged = sameCenter(nextCenter, currentCenter.value);
 
-  if (Math.abs(nextZoom - currentZoom.value) < 0.001) {
+  if (zoomUnchanged && centerUnchanged) {
     return;
   }
 
-  const wasLabelVisible = isLabelVisibleByZoom(currentZoom.value);
-  const willLabelVisible = isLabelVisibleByZoom(nextZoom);
-  currentZoom.value = nextZoom;
+  const wasLabelVisible = shouldShowBaseLabels(currentZoom.value);
+  const willLabelVisible = shouldShowBaseLabels(nextZoom);
+  const updates: Array<Record<string, unknown>> = [];
+
+  if (props.provinceBoundaryMapName) {
+    const boundaryUpdate: Record<string, unknown> = {
+      id: PROVINCE_BOUNDARY_SERIES_ID,
+      zoom: nextZoom,
+    };
+
+    if (nextCenter) {
+      boundaryUpdate.center = nextCenter;
+    }
+
+    updates.push(boundaryUpdate);
+  }
 
   if (wasLabelVisible !== willLabelVisible) {
+    updates.push({
+      id: MAP_SERIES_ID,
+      label: {
+        show: willLabelVisible,
+      },
+    });
+  }
+
+  currentZoom.value = nextZoom;
+  currentCenter.value = nextCenter;
+
+  if (updates.length > 0) {
     chart?.setOption(
       {
         animationDurationUpdate: 0,
-        series: [
-          {
-            id: MAP_SERIES_ID,
-            label: {
-              show: willLabelVisible,
-            },
-          },
-        ],
+        series: updates,
       },
       {
         lazyUpdate: true,
@@ -107,12 +191,130 @@ function handleGeoRoam(): void {
   }
 }
 
+function stopRegionBlink(): void {
+  if (blinkIntervalTimer) {
+    clearInterval(blinkIntervalTimer);
+    blinkIntervalTimer = null;
+  }
+
+  if (blinkStopTimer) {
+    clearTimeout(blinkStopTimer);
+    blinkStopTimer = null;
+  }
+
+  if (chart && activeBlinkDataIndex !== null) {
+    chart.dispatchAction({
+      type: "downplay",
+      seriesId: MAP_SERIES_ID,
+      dataIndex: activeBlinkDataIndex,
+    });
+  }
+
+  activeBlinkDataIndex = null;
+}
+
+function startRegionBlink(dataIndex: number, durationMs: number): void {
+  stopRegionBlink();
+
+  if (!chart) {
+    return;
+  }
+
+  let highlighted = false;
+  activeBlinkDataIndex = dataIndex;
+  const toggle = () => {
+    if (!chart || activeBlinkDataIndex === null) {
+      return;
+    }
+
+    chart.dispatchAction({
+      type: highlighted ? "downplay" : "highlight",
+      seriesId: MAP_SERIES_ID,
+      dataIndex: activeBlinkDataIndex,
+    });
+    highlighted = !highlighted;
+  };
+
+  toggle();
+  blinkIntervalTimer = setInterval(toggle, 450);
+  blinkStopTimer = setTimeout(() => {
+    stopRegionBlink();
+  }, durationMs);
+}
+
+function applyFocusRequest(): void {
+  const request = props.focusRequest;
+  if (!chart || !request || request.token === lastAppliedFocusToken) {
+    return;
+  }
+
+  const dataIndex = props.regions.findIndex((region) => region.code === request.code);
+  if (dataIndex < 0) {
+    return;
+  }
+
+  const updates: Array<Record<string, unknown>> = [];
+  const baseUpdate: Record<string, unknown> = {
+    id: MAP_SERIES_ID,
+  };
+
+  if (typeof request.zoom === "number" && Number.isFinite(request.zoom) && request.zoom > 0) {
+    baseUpdate.zoom = request.zoom;
+    currentZoom.value = request.zoom;
+  }
+
+  if (request.center) {
+    baseUpdate.center = request.center;
+    currentCenter.value = request.center;
+  }
+
+  if (Object.keys(baseUpdate).length > 1) {
+    updates.push(baseUpdate);
+  }
+
+  if (props.provinceBoundaryMapName) {
+    const boundaryUpdate: Record<string, unknown> = {
+      id: PROVINCE_BOUNDARY_SERIES_ID,
+    };
+
+    if (typeof request.zoom === "number" && Number.isFinite(request.zoom) && request.zoom > 0) {
+      boundaryUpdate.zoom = request.zoom;
+    }
+
+    if (request.center) {
+      boundaryUpdate.center = request.center;
+    }
+
+    if (Object.keys(boundaryUpdate).length > 1) {
+      updates.push(boundaryUpdate);
+    }
+  }
+
+  if (updates.length > 0) {
+    chart.setOption(
+      {
+        animationDurationUpdate: 320,
+        series: updates,
+      },
+      {
+        lazyUpdate: true,
+      }
+    );
+  }
+
+  startRegionBlink(dataIndex, request.durationMs ?? 5000);
+  lastAppliedFocusToken = request.token;
+}
+
 function render(): void {
   if (!chart || !props.mapName) {
     return;
   }
 
   const isNewMap = lastRenderedMapName !== props.mapName;
+  if (isNewMap) {
+    currentCenter.value = null;
+  }
   const data = props.regions.map((region) => {
     const mark = markForRegion(region.code);
 
@@ -123,67 +325,111 @@ function render(): void {
       itemStyle: mark
         ? {
             areaColor: mark.color,
-            borderColor: "#5f7f98",
+            borderColor: MAP_REGION_BORDER_COLOR,
             borderWidth: 1,
           }
         : undefined,
     };
   });
 
-  chart.setOption(
+  const series: Array<Record<string, unknown>> = [
     {
-      tooltip: {
+      type: "map",
+      id: MAP_SERIES_ID,
+      map: props.mapName,
+      roam: true,
+      zoom: currentZoom.value,
+      selectedMode: false,
+      ...(isNewMap
+        ? {
+            layoutCenter: initialLayoutCenter(),
+            layoutSize: MAP_LAYOUT_SIZE,
+          }
+        : {}),
+      label: {
+        show: shouldShowBaseLabels(currentZoom.value),
+        color: "#000000",
+        fontSize: 10,
+        formatter: (params: { name?: string; data?: { adcode?: string } }) => {
+          const code = String(params.data?.adcode ?? "");
+          if (shouldHideBaseLabel(code)) {
+            return "";
+          }
+          return getRegionDisplayName(String(params.name ?? ""), code);
+        },
+      },
+      itemStyle: {
+        areaColor: MAP_REGION_BACKGROUND_COLOR,
+        borderColor: MAP_REGION_BORDER_COLOR,
+        borderWidth: 1,
+      },
+      emphasis: {
+        label: {
+          show: true,
+          color: "#000000",
+          formatter: (params: { name?: string; data?: { adcode?: string } }) =>
+            getRegionDisplayName(String(params.name ?? ""), String(params.data?.adcode ?? "")),
+        },
+        itemStyle: {
+          areaColor: "#d8e5f2",
+        },
+      },
+      data,
+    },
+  ];
+
+  const showProvinceBoundary = Boolean(props.provinceBoundaryMapName);
+  const boundaryMapName = props.provinceBoundaryMapName ?? props.mapName;
+
+  series.push({
+    type: "map",
+    id: PROVINCE_BOUNDARY_SERIES_ID,
+    map: boundaryMapName,
+    roam: false,
+    silent: true,
+    zoom: currentZoom.value,
+    selectedMode: false,
+    ...(isNewMap
+      ? {
+          layoutCenter: initialLayoutCenter(),
+          layoutSize: MAP_LAYOUT_SIZE,
+        }
+      : {}),
+    ...(currentCenter.value
+      ? {
+          center: currentCenter.value,
+        }
+      : {}),
+    label: {
+      show: false,
+    },
+    itemStyle: {
+      areaColor: "rgba(0,0,0,0)",
+      borderColor: showProvinceBoundary ? CITY_PROVINCE_BOUNDARY_COLOR : "rgba(0,0,0,0)",
+      borderWidth: showProvinceBoundary ? 1 : 0,
+    },
+    emphasis: {
+      label: {
         show: false,
       },
-      series: [
-        {
-          type: "map",
-          id: MAP_SERIES_ID,
-          map: props.mapName,
-          roam: true,
-          zoom: currentZoom.value,
-          selectedMode: false,
-          ...(isNewMap
-            ? {
-                layoutCenter: initialLayoutCenter(),
-                layoutSize: MAP_LAYOUT_SIZE,
-              }
-            : {}),
-          label: {
-            show: isLabelVisibleByZoom(currentZoom.value),
-            color: "#000000",
-            fontSize: 10,
-            formatter: (params: { name?: string; data?: { adcode?: string } }) => {
-              const code = String(params.data?.adcode ?? "");
-              if (shouldHideBaseLabel(code)) {
-                return "";
-              }
-              return getRegionDisplayName(String(params.name ?? ""), code);
-            },
-          },
-          itemStyle: {
-            areaColor: "#edf3f8",
-            borderColor: "#93a9bc",
-            borderWidth: 1,
-          },
-          emphasis: {
-            label: {
-              show: true,
-              color: "#000000",
-              formatter: (params: { name?: string; data?: { adcode?: string } }) =>
-                getRegionDisplayName(String(params.name ?? ""), String(params.data?.adcode ?? "")),
-            },
-            itemStyle: {
-              areaColor: "#d8e5f2",
-            },
-          },
-          data,
-        },
-      ],
-      animationDurationUpdate: 260,
-    }
-  );
+      itemStyle: {
+        areaColor: "rgba(0,0,0,0)",
+        borderColor: showProvinceBoundary ? CITY_PROVINCE_BOUNDARY_COLOR : "rgba(0,0,0,0)",
+        borderWidth: showProvinceBoundary ? 1 : 0,
+      },
+    },
+    z: showProvinceBoundary ? 8 : -1,
+  });
+
+  chart.setOption({
+    tooltip: {
+      show: false,
+    },
+    series,
+    animationDurationUpdate: 260,
+  });
   lastRenderedMapName = props.mapName;
+  applyFocusRequest();
 }
 
 function resize(): void {
@@ -223,6 +469,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener("resize", resize);
+  stopRegionBlink();
 
   if (chart) {
     chart.off("click", handleRegionClick as never);
@@ -234,7 +481,15 @@ onBeforeUnmount(() => {
 });
 
 watch(
-  () => [props.mapName, props.regions, props.marks, props.viewLevel],
+  () => [
+    props.mapName,
+    props.provinceBoundaryMapName,
+    props.regions,
+    props.marks,
+    props.viewLevel,
+    props.hideBaseLabelsByDefault,
+    props.focusRequest?.token,
+  ],
   () => {
     render();
   },

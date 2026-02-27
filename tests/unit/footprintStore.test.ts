@@ -56,6 +56,27 @@ describe("useFootprintStore", () => {
     expect(store.getMark({ level: "province", code: "440000" })?.color).toBe("#52a7d7");
   });
 
+  it("clears province mark and all city marks in that province", () => {
+    store.setMark({ level: "province", code: "440000", name: "广东省" }, "#EFA8A2");
+    store.setMark({ level: "city", code: "440100", name: "广州市" }, "#9EC7E8");
+    store.setMark({ level: "city", code: "440300", name: "深圳市" }, "#A8D8B9");
+    store.setMark({ level: "city", code: "330100", name: "杭州市" }, "#F2C38A");
+
+    store.clearProvinceMarkWithCities({ level: "province", code: "440000", name: "广东省" });
+
+    expect(store.getMark({ level: "province", code: "440000" })).toBeUndefined();
+    expect(store.getMark({ level: "city", code: "440100" })).toBeUndefined();
+    expect(store.getMark({ level: "city", code: "440300" })).toBeUndefined();
+    expect(store.getMark({ level: "city", code: "330100" })?.color).toBe("#F2C38A");
+  });
+
+  it("marks province with same color when city is marked", () => {
+    store.setCityMarkWithProvinceSync({ level: "city", code: "310100", name: "上海市" }, "#9EC7E8");
+
+    expect(store.getMark({ level: "city", code: "310100" })?.color).toBe("#9EC7E8");
+    expect(store.getMark({ level: "province", code: "310000" })?.color).toBe("#9EC7E8");
+  });
+
   it("rejects invalid imported payload", () => {
     const accepted = store.importState({
       version: 1,

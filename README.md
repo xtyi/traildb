@@ -4,7 +4,7 @@ TrailDB 是一个可静态部署的旅行足迹 WebApp（Vue3 + TypeScript + Vit
 
 ## 功能（v1）
 
-- 中国地图省级/市级切换（点击省份下钻到市级）
+- 中国地图省级/市级切换（按钮直接切换）
 - 多颜色标记去过的地区
 - 本地持久化（IndexedDB / localStorage）
 - 数据导出 / 导入（支持合并或覆盖策略）
@@ -55,6 +55,9 @@ npm run test:e2e
   - `map.labelHideZoomThreshold`：缩小到该比例及以下时，默认隐藏区域名称（hover 仍显示）
   - `map.initialOffsetPercent.x`：地图初始横向偏移（单位：百分比，正数向右）
   - `map.initialOffsetPercent.y`：地图初始纵向偏移（单位：百分比，正数向下，负数向上）
+  - `map.colors.regionBorder`：地图区域边框颜色
+  - `map.colors.regionBackground`：地图区域背景颜色
+  - `map.colors.cityProvinceBoundary`：市级地图中的省级边界颜色
 
 
 ```jsonc
@@ -65,6 +68,11 @@ npm run test:e2e
     "initialOffsetPercent": {
       "x": -5, // 越大地图越靠右
       "y": 13 // 越大地图越靠上
+    },
+    "colors": {
+      "regionBorder": "#93a9bc", // 地图区域边框
+      "regionBackground": "#edf3f8", // 地图区域背景
+      "cityProvinceBoundary": "#5c7287" // 市级地图叠加的省级边界
     }
   }
 }

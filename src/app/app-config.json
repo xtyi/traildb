@@ -2,9 +2,26 @@
   "map": {
     "defaultZoom": 1.30,
     "labelHideZoomThreshold": 1.45,
+    "showCityProvinceBoundary": false,
     "initialOffsetPercent": {
       "x": -4,
       "y": 15
+    },
+    "colors": {
+      "regionBorder": "#999999",
+      "regionBackground": "#ffffff",
+      "cityProvinceBoundary": "#666666"
     }
+  },
+  "footprint": {
+    "palette": [
+      "#EFA8A2",
+      "#F2C38A",
+      "#F0DA9A",
+      "#A8D8B9",
+      "#9EC7E8",
+      "#B9B6E5",
+      "#E2B7CF"
+    ]
   }
 }

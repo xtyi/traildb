@@ -95,8 +95,21 @@ async function main() {
       name: "中国",
       geoPath: "geo/country/china.json",
     },
+    city: {
+      code: "100000",
+      name: "中国市级",
+      geoPath: "geo/city/china-city.json",
+    },
+    provinceBoundary: {
+      code: "100000",
+      name: "中国省级边界",
+      geoPath: "geo/province/china-boundary.json",
+    },
     provinces: {},
   };
+  const mergedCityFeatures = [];
+  const mergedProvinceFeatures = [];
+  const seenCityCodes = new Set();
 
   for (const province of provinces) {
     const provinceCode = province.code;
@@ -113,6 +126,20 @@ async function main() {
     );
 
     writeJson(resolve(CITY_DIR, `${provinceCode}.json`), cityGeo);
+    mergedProvinceFeatures.push(province.feature);
+
+    for (const feature of cityGeo.features) {
+      const properties = feature?.properties ?? {};
+      const code = normalizeCode(properties.adcode ?? properties.code);
+      const dedupeKey = code ?? JSON.stringify(feature.geometry ?? {});
+
+      if (seenCityCodes.has(dedupeKey)) {
+        continue;
+      }
+
+      seenCityCodes.add(dedupeKey);
+      mergedCityFeatures.push(feature);
+    }
 
     mapIndex.provinces[provinceCode] = {
       code: provinceCode,
@@ -125,6 +152,14 @@ async function main() {
     console.log(`Fetched ${provinceCode} ${provinceName}`);
   }
 
+  writeJson(resolve(CITY_DIR, "china-city.json"), {
+    type: "FeatureCollection",
+    features: mergedCityFeatures,
+  });
+  writeJson(resolve(PROVINCE_DIR, "china-boundary.json"), {
+    type: "FeatureCollection",
+    features: mergedProvinceFeatures,
+  });
   writeJson(resolve(COUNTRY_DIR, "china.json"), countryGeo);
   writeFileSync(resolve(GEO_ROOT, "map-index.json"), JSON.stringify(mapIndex, null, 2));
 
